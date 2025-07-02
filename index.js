@@ -40,14 +40,16 @@ async function run() {
     const parcelsCollection = database.collection("parcels");
     const paymentsCollection = database.collection("payments");
     const userCollection = database.collection("users");
+    const ridersCollection = database.collection("riders");
 
     // custom middleware
     const verfyFBtoken = async (req, res, next) => {
-      const authHeader = req.headers.Authorization;
+      const authHeader = req.headers.authorization;
       if (!authHeader) {
         return res.status(401).send({ message: "unauthorized access" });
       }
       const token = authHeader.split(" ")[1];
+
       if (!token) {
         return res.status(401).send({ message: "unauthorized access" });
       }
@@ -83,7 +85,7 @@ async function run() {
     });
 
     // parcel get api
-    app.get("/parcels",verfyFBtoken, async (req, res) => {
+    app.get("/parcels", verfyFBtoken, async (req, res) => {
       try {
         const userEmail = req.query.email;
         const query = userEmail ? { created_by: userEmail } : {};
@@ -158,6 +160,43 @@ async function run() {
       }
     });
 
+    // rider relate api
+    app.post("/riders", async (req, res) => {
+      const riders = req.body;
+      const result = await ridersCollection.insertOne(riders);
+      res.send(result);
+    });
+
+    // GET all pending riders
+    app.get("/riders/pending", async (req, res) => {
+      try {
+        const pendingRiders = await ridersCollection
+          .find({ status: "pending" })
+          .sort({ created_at: -1 }) // optional: latest first
+          .toArray();
+
+        res.status(200).json(pendingRiders);
+      } catch (error) {
+        console.error("Error fetching pending riders:", error);
+        res.status(500).json({ error: "Failed to fetch pending riders" });
+      }
+    });
+
+    app.patch("/riders/:id", async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body;
+      if (!["accepted", "cancelled"].includes(status)) {
+        return res.status(400).send({ message: "Invalid status" });
+      }
+
+      const result = await ridersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+      );
+
+      res.send(result);
+    });
+
     // tracking related api
     app.post("/tracking", async (req, res) => {
       try {
@@ -197,10 +236,10 @@ async function run() {
     // payment related api
 
     // get payment by user
-    app.get("/payments",verfyFBtoken, async (req, res) => {
+    app.get("/payments", verfyFBtoken, async (req, res) => {
       try {
         const email = req.query.email;
-        if(req.decoded.email !== email){
+        if (req.decoded.email !== email) {
           return res.status(403).send({ message: "forbidden access" });
         }
         const query = email ? { email } : {}; // If email is provided, filter by it
