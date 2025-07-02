@@ -168,7 +168,7 @@ async function run() {
     });
 
     // GET all pending riders
-    app.get("/riders/pending", async (req, res) => {
+    app.get("/riders/pending", verfyFBtoken, async (req, res) => {
       try {
         const pendingRiders = await ridersCollection
           .find({ status: "pending" })
@@ -182,10 +182,24 @@ async function run() {
       }
     });
 
+    app.get("/riders/active", verfyFBtoken, async (req, res) => {
+      try {
+        const activeRiders = await ridersCollection
+          .find({ status: "active" })
+          .sort({ created_at: -1 }) // optional: newest first
+          .toArray();
+
+        res.status(200).json(activeRiders);
+      } catch (error) {
+        console.error("Error fetching active riders:", error);
+        res.status(500).json({ error: "Failed to fetch active riders" });
+      }
+    });
+
     app.patch("/riders/:id", async (req, res) => {
       const { id } = req.params;
       const { status } = req.body;
-      if (!["accepted", "cancelled"].includes(status)) {
+      if (!["active", "cancelled", "deactivated"].includes(status)) {
         return res.status(400).send({ message: "Invalid status" });
       }
 
