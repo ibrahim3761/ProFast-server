@@ -63,20 +63,20 @@ async function run() {
       }
     };
 
-    const verifyAdmin = async (req,res,next)=>{
+    const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
       console.log(email);
-      
-      const query = {email};
-      const user = await userCollection.findOne(query)
-      if(!user || user.role !== 'admin'){
-         return res.status(403).send({ message: "forbidden access" });
+
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(401).send({ message: "forbidden access" });
       }
-      next()
-    }
+      next();
+    };
 
     // GET /users/search?email=partial@example
-    app.get("/users/search",verfyFBtoken, async (req, res) => {
+    app.get("/users/search", verfyFBtoken, async (req, res) => {
       const emailQuery = req.query.email;
 
       if (!emailQuery) {
@@ -103,7 +103,7 @@ async function run() {
     });
 
     // GET /users/:email/role
-    app.get("/users/:email/role",verfyFBtoken, async (req, res) => {
+    app.get("/users/:email/role", verfyFBtoken, async (req, res) => {
       const email = req.params.email;
 
       try {
@@ -143,31 +143,49 @@ async function run() {
 
     const { ObjectId } = require("mongodb");
 
-    app.patch("/users/:id/role", verfyFBtoken,verifyAdmin, async (req, res) => {
-      const id = req.params.id;
-      const { role } = req.body; // expect "admin" or "user"
+    app.patch(
+      "/users/:id/role",
+      verfyFBtoken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { role } = req.body; // expect "admin" or "user"
 
-      try {
-        const result = await userCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role } }
-        );
+        try {
+          const result = await userCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { role } }
+          );
 
-        res.status(200).json({
-          message: `User role updated to ${role}`,
-          modifiedCount: result.modifiedCount,
-        });
-      } catch (error) {
-        console.error("Error updating user role:", error);
-        res.status(500).json({ error: "Failed to update user role" });
+          res.status(200).json({
+            message: `User role updated to ${role}`,
+            modifiedCount: result.modifiedCount,
+          });
+        } catch (error) {
+          console.error("Error updating user role:", error);
+          res.status(500).json({ error: "Failed to update user role" });
+        }
       }
-    });
+    );
 
     // parcel get api
     app.get("/parcels", verfyFBtoken, async (req, res) => {
       try {
-        const userEmail = req.query.email;
-        const query = userEmail ? { created_by: userEmail } : {};
+        const { email, payment_status, delivery_status } = req.query;
+
+        const query = {};
+
+        if (email) {
+          query.created_by = email;
+        }
+
+        if (payment_status) {
+          query.payment_status = payment_status;
+        }
+
+        if (delivery_status) {
+          query.delivery_status = delivery_status;
+        }
 
         const parcels = await parcelsCollection
           .find(query)
@@ -215,6 +233,63 @@ async function run() {
         res.status(500).json({ error: "Failed to save parcel" });
       }
     });
+    app.patch(
+      "/parcels/:id/assign",
+      verfyFBtoken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const parcelId = req.params.id;
+          const { riderId, riderName } = req.body;
+
+          if (!riderId || !riderName) {
+            return res
+              .status(400)
+              .json({ error: "riderId and riderName are required" });
+          }
+
+          // 1. Update the parcel: assign rider and set delivery status
+          const updateParcelResult = await parcelsCollection.updateOne(
+            { _id: new ObjectId(parcelId) },
+            {
+              $set: {
+                assigned_rider: {
+                  id: riderId,
+                  name: riderName,
+                },
+                delivery_status: "assigned",
+                assigned_at: new Date(),
+              },
+            }
+          );
+
+          if (updateParcelResult.matchedCount === 0) {
+            return res.status(404).json({ error: "Parcel not found" });
+          }
+
+          // 2. Update the rider’s work_status to 'in_delivery'
+          const updateRiderResult = await ridersCollection.updateOne(
+            { _id: new ObjectId(riderId) },
+            { $set: { work_status: "in_delivery" } }
+          );
+
+          if (updateRiderResult.matchedCount === 0) {
+            return res.status(404).json({ error: "Rider not found" });
+          }
+
+          res
+            .status(200)
+            .json({
+              message: "Rider assigned and status updated successfully",
+            });
+        } catch (error) {
+          console.error("Error assigning rider and updating status:", error);
+          res
+            .status(500)
+            .json({ error: "Failed to assign rider or update status" });
+        }
+      }
+    );
 
     // parcel delete
     app.delete("/parcels/:id", async (req, res) => {
@@ -261,11 +336,20 @@ async function run() {
       }
     });
 
-    app.get("/riders/active", verfyFBtoken,verifyAdmin, async (req, res) => {
+    app.get("/riders/active", verfyFBtoken, verifyAdmin, async (req, res) => {
       try {
+        const { district } = req.query;
+
+        const filter = {
+          status: "active",
+          ...(district && {
+            warehouse: { $regex: new RegExp(`^${district}$`, "i") }, // match against 'warehouse'
+          }),
+        };
+
         const activeRiders = await ridersCollection
-          .find({ status: "active" })
-          .sort({ created_at: -1 }) // optional: newest first
+          .find(filter)
+          .sort({ created_at: -1 })
           .toArray();
 
         res.status(200).json(activeRiders);
