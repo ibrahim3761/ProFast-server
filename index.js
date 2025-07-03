@@ -63,8 +63,20 @@ async function run() {
       }
     };
 
+    const verifyAdmin = async (req,res,next)=>{
+      const email = req.decoded.email;
+      console.log(email);
+      
+      const query = {email};
+      const user = await userCollection.findOne(query)
+      if(!user || user.role !== 'admin'){
+         return res.status(403).send({ message: "forbidden access" });
+      }
+      next()
+    }
+
     // GET /users/search?email=partial@example
-    app.get("/users/search", async (req, res) => {
+    app.get("/users/search",verfyFBtoken, async (req, res) => {
       const emailQuery = req.query.email;
 
       if (!emailQuery) {
@@ -86,6 +98,24 @@ async function run() {
         res.status(200).json(users);
       } catch (error) {
         console.error("Error searching users:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
+
+    // GET /users/:email/role
+    app.get("/users/:email/role",verfyFBtoken, async (req, res) => {
+      const email = req.params.email;
+
+      try {
+        const user = await userCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).json({ error: "User not found" });
+        }
+
+        res.status(200).json({ role: user.role || "user" }); // default fallback
+      } catch (error) {
+        console.error("Error fetching user role:", error);
         res.status(500).json({ error: "Internal Server Error" });
       }
     });
@@ -113,7 +143,7 @@ async function run() {
 
     const { ObjectId } = require("mongodb");
 
-    app.patch("/users/:id/role", async (req, res) => {
+    app.patch("/users/:id/role", verfyFBtoken,verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body; // expect "admin" or "user"
 
@@ -217,7 +247,7 @@ async function run() {
     });
 
     // GET all pending riders
-    app.get("/riders/pending", verfyFBtoken, async (req, res) => {
+    app.get("/riders/pending", verfyFBtoken, verifyAdmin, async (req, res) => {
       try {
         const pendingRiders = await ridersCollection
           .find({ status: "pending" })
@@ -231,7 +261,7 @@ async function run() {
       }
     });
 
-    app.get("/riders/active", verfyFBtoken, async (req, res) => {
+    app.get("/riders/active", verfyFBtoken,verifyAdmin, async (req, res) => {
       try {
         const activeRiders = await ridersCollection
           .find({ status: "active" })
