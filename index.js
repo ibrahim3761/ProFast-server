@@ -63,6 +63,33 @@ async function run() {
       }
     };
 
+    // GET /users/search?email=partial@example
+    app.get("/users/search", async (req, res) => {
+      const emailQuery = req.query.email;
+
+      if (!emailQuery) {
+        return res.status(400).json({ error: "Email query is required" });
+      }
+
+      try {
+        const regex = new RegExp(emailQuery, "i"); // case-insensitive
+        const users = await userCollection
+          .find({ email: { $regex: regex } })
+          .project({ email: 1, role: 1, created_at: 1 })
+          .limit(10) // optional: limit results
+          .toArray();
+
+        if (users.length === 0) {
+          return res.status(404).json({ error: "No matching users found" });
+        }
+
+        res.status(200).json(users);
+      } catch (error) {
+        console.error("Error searching users:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
+
     app.post("/users", async (req, res) => {
       const email = req.body.email;
       const userExists = await userCollection.findOne({ email });
@@ -82,6 +109,28 @@ async function run() {
       const user = req.body;
       const result = await userCollection.insertOne(user);
       res.send(result);
+    });
+
+    const { ObjectId } = require("mongodb");
+
+    app.patch("/users/:id/role", async (req, res) => {
+      const id = req.params.id;
+      const { role } = req.body; // expect "admin" or "user"
+
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        res.status(200).json({
+          message: `User role updated to ${role}`,
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Error updating user role:", error);
+        res.status(500).json({ error: "Failed to update user role" });
+      }
     });
 
     // parcel get api
@@ -198,7 +247,7 @@ async function run() {
 
     app.patch("/riders/:id", async (req, res) => {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, email } = req.body;
       if (!["active", "cancelled", "deactivated"].includes(status)) {
         return res.status(400).send({ message: "Invalid status" });
       }
@@ -207,6 +256,20 @@ async function run() {
         { _id: new ObjectId(id) },
         { $set: { status } }
       );
+
+      if (status === "active") {
+        const userQuery = { email };
+        const userUpdatedoc = {
+          $set: {
+            role: "rider",
+          },
+        };
+        const roleResult = await userCollection.updateOne(
+          userQuery,
+          userUpdatedoc
+        );
+        console.log(roleResult.modifiedCount);
+      }
 
       res.send(result);
     });
