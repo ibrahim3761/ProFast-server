@@ -240,12 +240,12 @@ async function run() {
       async (req, res) => {
         try {
           const parcelId = req.params.id;
-          const { riderId, riderName } = req.body;
+          const { riderId, riderName, riderEmail } = req.body;
 
-          if (!riderId || !riderName) {
-            return res
-              .status(400)
-              .json({ error: "riderId and riderName are required" });
+          if (!riderId || !riderName || !riderEmail) {
+            return res.status(400).json({
+              error: "riderId, riderName and riderEmail are required",
+            });
           }
 
           // 1. Update the parcel: assign rider and set delivery status
@@ -256,8 +256,9 @@ async function run() {
                 assigned_rider: {
                   id: riderId,
                   name: riderName,
+                  email: riderEmail,
                 },
-                delivery_status: "assigned",
+                delivery_status: "rider_assigned",
                 assigned_at: new Date(),
               },
             }
@@ -277,11 +278,9 @@ async function run() {
             return res.status(404).json({ error: "Rider not found" });
           }
 
-          res
-            .status(200)
-            .json({
-              message: "Rider assigned and status updated successfully",
-            });
+          res.status(200).json({
+            message: "Rider assigned and status updated successfully",
+          });
         } catch (error) {
           console.error("Error assigning rider and updating status:", error);
           res
@@ -290,6 +289,30 @@ async function run() {
         }
       }
     );
+
+    app.patch("/parcels/:id/status", verfyFBtoken, async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      if (!["in_transit", "delivered"].includes(status)) {
+        return res.status(400).json({ error: "Invalid status" });
+      }
+
+      try {
+        const result = await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { delivery_status: status } }
+        );
+
+        res.status(200).json({
+          message: `Parcel status updated to ${status}`,
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Failed to update parcel status:", error);
+        res.status(500).json({ error: "Failed to update status" });
+      }
+    });
 
     // parcel delete
     app.delete("/parcels/:id", async (req, res) => {
@@ -356,6 +379,32 @@ async function run() {
       } catch (error) {
         console.error("Error fetching active riders:", error);
         res.status(500).json({ error: "Failed to fetch active riders" });
+      }
+    });
+
+    // GET /riders/parcels?email=example@gmail.com
+    app.get("/riders/parcels", verfyFBtoken, async (req, res) => {
+      try {
+        const riderEmail = req.query.email;
+
+        if (!riderEmail) {
+          return res.status(400).json({ error: "Rider email is required" });
+        }
+
+        const query = {
+          "assigned_rider.email": riderEmail,
+          delivery_status: { $in: ["rider_assigned", "in_transit"] },
+        };
+
+        const parcels = await parcelsCollection
+          .find(query)
+          .sort({ creation_date: -1 })
+          .toArray();
+
+        res.status(200).json(parcels);
+      } catch (error) {
+        console.error("Error fetching rider parcels:", error);
+        res.status(500).json({ error: "Failed to fetch rider parcels" });
       }
     });
 
