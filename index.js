@@ -65,11 +65,22 @@ async function run() {
 
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
-      console.log(email);
+
 
       const query = { email };
       const user = await userCollection.findOne(query);
       if (!user || user.role !== "admin") {
+        return res.status(401).send({ message: "forbidden access" });
+      }
+      next();
+    };
+    const verifyRider = async (req, res, next) => {
+      const email = req.decoded.email;
+ 
+
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "rider") {
         return res.status(401).send({ message: "forbidden access" });
       }
       next();
@@ -298,10 +309,21 @@ async function run() {
         return res.status(400).json({ error: "Invalid status" });
       }
 
+      const updateFields = {
+        delivery_status: status,
+      };
+
+      // Add timestamp fields based on the status
+      if (status === "in_transit") {
+        updateFields.in_transit_at = new Date();
+      } else if (status === "delivered") {
+        updateFields.delivered_at = new Date();
+      }
+
       try {
         const result = await parcelsCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { delivery_status: status } }
+          { $set: updateFields }
         );
 
         res.status(200).json({
@@ -311,6 +333,63 @@ async function run() {
       } catch (error) {
         console.error("Failed to update parcel status:", error);
         res.status(500).json({ error: "Failed to update status" });
+      }
+    });
+
+    // PATCH /parcels/:id/cashout
+    app.patch("/parcels/:id/cashout", verfyFBtoken, async (req, res) => {
+      const { id } = req.params;
+
+      try {
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!parcel) {
+          return res.status(404).json({ error: "Parcel not found" });
+        }
+
+        if (parcel.cashed_out_status === "cashed_out") {
+          return res.status(400).json({ error: "Parcel already cashed out" });
+        }
+
+        // Calculate rider earning
+        const isSameDistrict =
+          parcel.sender_district.toLowerCase() ===
+          parcel.receiver_district.toLowerCase();
+
+        const percentage = isSameDistrict ? 0.8 : 0.3;
+        const earning = Math.round(parcel.cost * percentage); // round off
+
+        // Update parcel as cashed out
+        const parcelUpdate = await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              cashed_out_status: "cashed_out",
+              cashed_out_at: new Date(),
+            },
+          }
+        );
+
+        // Update rider earnings
+        const riderEmail = parcel.assigned_rider?.email;
+        if (riderEmail) {
+          await ridersCollection.updateOne(
+            { email: riderEmail },
+            {
+              $inc: { total_earnings: earning },
+            }
+          );
+        }
+
+        res.status(200).json({
+          message: `Parcel cashed out successfully. Rider earned ৳${earning}`,
+          earning,
+        });
+      } catch (error) {
+        console.error("Cashout failed:", error);
+        res.status(500).json({ error: "Failed to cashout parcel" });
       }
     });
 
@@ -383,7 +462,7 @@ async function run() {
     });
 
     // GET /riders/parcels?email=example@gmail.com
-    app.get("/riders/parcels", verfyFBtoken, async (req, res) => {
+    app.get("/riders/parcels", verfyFBtoken, verifyRider, async (req, res) => {
       try {
         const riderEmail = req.query.email;
 
@@ -407,6 +486,39 @@ async function run() {
         res.status(500).json({ error: "Failed to fetch rider parcels" });
       }
     });
+
+    // GET /riders/parcels/completed?email=...
+    app.get(
+      "/riders/parcels/completed",
+      verfyFBtoken,
+      verifyRider,
+      async (req, res) => {
+        try {
+          const { email } = req.query;
+
+          if (!email) {
+            return res
+              .status(400)
+              .json({ error: "Email query parameter is required" });
+          }
+
+          const query = {
+            "assigned_rider.email": email,
+            delivery_status: { $in: ["delivered", "service_center_delivered"] },
+          };
+
+          const completedParcels = await parcelsCollection
+            .find(query)
+            .sort({ updated_at: -1 }) // if you track updates
+            .toArray();
+
+          res.status(200).json(completedParcels);
+        } catch (error) {
+          console.error("Error fetching completed parcels:", error);
+          res.status(500).json({ error: "Failed to fetch completed parcels" });
+        }
+      }
+    );
 
     app.patch("/riders/:id", async (req, res) => {
       const { id } = req.params;
