@@ -41,6 +41,7 @@ async function run() {
     const paymentsCollection = database.collection("payments");
     const userCollection = database.collection("users");
     const ridersCollection = database.collection("riders");
+    const trackingsCollection = database.collection("trackings");
 
     // custom middleware
     const verfyFBtoken = async (req, res, next) => {
@@ -66,9 +67,10 @@ async function run() {
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
 
-
       const query = { email };
       const user = await userCollection.findOne(query);
+
+      
       if (!user || user.role !== "admin") {
         return res.status(401).send({ message: "forbidden access" });
       }
@@ -76,7 +78,6 @@ async function run() {
     };
     const verifyRider = async (req, res, next) => {
       const email = req.decoded.email;
- 
 
       const query = { email };
       const user = await userCollection.findOne(query);
@@ -87,7 +88,7 @@ async function run() {
     };
 
     // GET /users/search?email=partial@example
-    app.get("/users/search", verfyFBtoken, async (req, res) => {
+    app.get("/users/search", verfyFBtoken, verifyAdmin, async (req, res) => {
       const emailQuery = req.query.email;
 
       if (!emailQuery) {
@@ -230,6 +231,36 @@ async function run() {
       } catch (error) {
         console.error("Error fetching parcel by ID:", error);
         res.status(500).json({ error: "Failed to fetch parcel" });
+      }
+    });
+
+    app.get("/parcels/user/:email", async (req, res) => {
+      try {
+        const userEmail = req.params.email;
+        const parcels = await parcelsCollection
+          .find({ created_by: userEmail })
+          .toArray();
+
+        // For each parcel, fetch latest tracking update (or full history if you want)
+        const parcelsWithTracking = await Promise.all(
+          parcels.map(async (parcel) => {
+            const trackingUpdates = await trackingsCollection
+              .find({ tracking_id: parcel.tracking_id })
+              .sort({ timestamp: -1 }) // latest first
+              .toArray();
+
+            return {
+              ...parcel,
+              latestTracking: trackingUpdates[0] || null,
+              trackingHistory: trackingUpdates, // optional if you want full history
+            };
+          })
+        );
+
+        res.status(200).json(parcelsWithTracking);
+      } catch (error) {
+        console.error("Error fetching parcels with tracking:", error);
+        res.status(500).json({ message: "Internal server error" });
       }
     });
 
@@ -545,43 +576,54 @@ async function run() {
         );
         console.log(roleResult.modifiedCount);
       }
-
       res.send(result);
     });
 
     // tracking related api
-    app.post("/tracking", async (req, res) => {
+    app.get("/trackings/:trackingId", async (req, res) => {
       try {
-        const {
-          tracking_id,
-          parcelId,
-          status,
-          message,
-          updated_by = "",
-        } = req.body;
+        const trackingId = req.params.trackingId;
 
-        if (!tracking_id || !parcelId || !status || !message || !updated_by) {
-          return res.status(400).json({ error: "All fields are required." });
+        const updates = await trackingsCollection
+          .find({ tracking_id: trackingId })
+          .sort({ timestamp: 1 }) // oldest first
+          .toArray();
+
+        if (!updates.length) {
+          return res
+            .status(404)
+            .json({ message: "No tracking history found." });
         }
 
-        const trackingDoc = {
-          tracking_id,
-          parcelId,
-          status,
-          message,
-          updated_by,
-          timestamp: new Date(),
-        };
+        res.status(200).json(updates);
+      } catch (error) {
+        console.error("Error fetching tracking updates:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
 
-        const result = await trackingCollection.insertOne(trackingDoc);
+    app.post("/trackings", async (req, res) => {
+      try {
+        const update = req.body;
 
+        if (!update.tracking_id || !update.status) {
+          return res
+            .status(400)
+            .json({ message: "tracking_id and status are required." });
+        }
+
+        update.timestamp = new Date();
+        update.location = update.location || "Unknown";
+        update.updated_by = update.updated_by || "system";
+
+        const result = await trackingsCollection.insertOne(update);
         res.status(201).json({
-          message: "Tracking update saved successfully.",
+          message: "Tracking update added.",
           insertedId: result.insertedId,
         });
       } catch (error) {
-        console.error("Error inserting tracking update:", error);
-        res.status(500).json({ error: "Failed to save tracking update." });
+        console.error("Error adding tracking update:", error);
+        res.status(500).json({ message: "Internal server error" });
       }
     });
 
