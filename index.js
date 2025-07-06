@@ -14,7 +14,9 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json()); // for parsing application/json
 
-const serviceAccount = require("./firebase-admin-key.json");
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+
+const serviceAccount = JSON.parse(decodedKey)
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -34,7 +36,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const database = client.db("parcelDB"); // You can rename "parcelDB" if you want
     const parcelsCollection = database.collection("parcels");
@@ -70,7 +72,6 @@ async function run() {
       const query = { email };
       const user = await userCollection.findOne(query);
 
-      
       if (!user || user.role !== "admin") {
         return res.status(401).send({ message: "forbidden access" });
       }
@@ -262,6 +263,39 @@ async function run() {
         console.error("Error fetching parcels with tracking:", error);
         res.status(500).json({ message: "Internal server error" });
       }
+    });
+
+    app.get("/parcels/delivery/status-count", async (req, res) => {
+      const riderEmail = req.query.email;
+
+      const pipeline = [];
+
+      if (riderEmail) {
+        pipeline.push({
+          $match: {
+            "assigned_rider.email": riderEmail,
+          },
+        });
+      }
+
+      pipeline.push(
+        {
+          $group: {
+            _id: "$delivery_status",
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            status: "$_id",
+            count: 1,
+            _id: 0,
+          },
+        }
+      );
+
+      const result = await parcelsCollection.aggregate(pipeline).toArray();
+      res.send(result);
     });
 
     // parcel post api
@@ -718,7 +752,7 @@ async function run() {
       });
     });
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
